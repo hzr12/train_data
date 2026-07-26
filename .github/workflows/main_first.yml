@@ -81,9 +81,9 @@ jobs:
             if git diff --cached --quiet; then
               echo "⚠️ 没有新的CSV文件需要提交"
             else
-              # 获取当前日期时间作为提交信息
-              COMMIT_DATE=$(date -u +'%Y-%m-%d %H:%M:%S UTC')
-              git commit -m "Auto-Update CSV files: $COMMIT_DATE"
+              # 获取提交的文件列表作为提交信息
+              COMMIT_FILES=$(git diff --cached --name-only | xargs -I {} basename {} | tr '\n' ', ' | sed 's/,$//')
+              git commit -m "Auto-Update: $COMMIT_FILES"
               git push https://$GH_TOKEN@github.com/${{ github.repository }}.git main
               echo "✅ CSV文件已提交"
               
