@@ -72,19 +72,38 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 使用计算出的日期
-          CSV_FILE="dataset/${{ steps.date_calc.outputs.MINUS_TWO_DAYS }}_*.csv"
-          
-          # 检查文件是否存在
-          if [ -f "$CSV_FILE" ]; then
-            git add "$CSV_FILE"
-            git commit -m "Auto-Update: ${{ steps.date_calc.outputs.MINUS_TWO_DAYS }}_*.csv"
-            git push https://$GH_TOKEN@github.com/${{ github.repository }}.git main
-            echo "✅ CSV文件已提交: $CSV_FILE"
+          # 检查dataset目录是否存在且包含CSV文件
+          if [ -d "dataset" ] && [ "$(ls -A dataset/*.csv 2>/dev/null)" ]; then
+            # 添加所有CSV文件
+            git add dataset/*.csv
+            
+            # 检查是否有要提交的更改
+            if git diff --cached --quiet; then
+              echo "⚠️ 没有新的CSV文件需要提交"
+            else
+              # 获取当前日期时间作为提交信息
+              COMMIT_DATE=$(date -u +'%Y-%m-%d %H:%M:%S UTC')
+              git commit -m "Auto-Update CSV files: $COMMIT_DATE"
+              git push https://$GH_TOKEN@github.com/${{ github.repository }}.git main
+              echo "✅ CSV文件已提交"
+              
+              # 显示提交的文件列表
+              echo "提交的文件:"
+              git diff --cached --name-only
+              
+              # 显示第一个文件的前5行作为预览
+              FIRST_FILE=$(git diff --cached --name-only | head -n 1)
+              if [ -n "$FIRST_FILE" ]; then
+                echo "文件内容预览 ($FIRST_FILE):"
+                head -n 5 "$FIRST_FILE"
+              fi
+            fi
           else
-            echo "❌ 文件未生成: $CSV_FILE"
+            echo "❌ 没有找到CSV文件"
             echo "检查main_first.py是否正确输出到dataset/目录"
+            echo "当前目录内容:"
+            ls -la
             echo "dataset目录内容:"
-            ls -la dataset/ || echo "dataset目录不存在"
+            ls -la dataset/ 2>/dev/null || echo "dataset目录不存在"
             exit 1
           fi

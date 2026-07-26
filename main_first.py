@@ -4,88 +4,11 @@ import time
 import pandas as pd
 
 # ========== 天气相关配置 ==========
-GEOCODING_URL = 'https://geocoding-api.open-meteo.com/v1/search'
-WEATHER_URL = 'https://api.open-meteo.com/v1/forecast'
 WTTR_URL = 'https://wttr.in'
-
-# 缓存站点坐标，避免重复查询
-_station_coords_cache = {}
-
-
-def geocode_station(station_name):
-    """使用 Open Meteo Geocoding API 将站名转换为经纬度坐标"""
-    if station_name in _station_coords_cache:
-        return _station_coords_cache[station_name]
-
-    # 尝试提取城市名（去掉"站"、"东"、"西"、"南"、"北"等后缀）
-    city_name = station_name.replace('站', '').replace('东', '').replace('西', '').replace('南', '').replace('北', '')
-
-    try:
-        resp = requests.get(GEOCODING_URL, params={
-            'name': city_name,
-            'count': 1,
-            'language': 'zh',
-            'countryCode': 'CN'
-        }, timeout=10)
-        data = resp.json()
-        if data.get('results'):
-            loc = data['results'][0]
-            coords = {'latitude': loc['latitude'], 'longitude': loc['longitude'], 'name': loc['name']}
-            _station_coords_cache[station_name] = coords
-            return coords
-    except Exception as e:
-        print(f"  [警告] 地理编码失败 ({station_name}): {e}")
-
-    # 回退：不加后缀再试一次
-    if city_name != station_name:
-        try:
-            resp = requests.get(GEOCODING_URL, params={
-                'name': station_name,
-                'count': 1,
-                'language': 'zh',
-                'countryCode': 'CN'
-            }, timeout=10)
-            data = resp.json()
-            if data.get('results'):
-                loc = data['results'][0]
-                coords = {'latitude': loc['latitude'], 'longitude': loc['longitude'], 'name': loc['name']}
-                _station_coords_cache[station_name] = coords
-                return coords
-        except Exception as e:
-            print(f"  [警告] 地理编码回退失败 ({station_name}): {e}")
-
-    return None
-
-
-def get_weather_open_meteo(latitude, longitude, date_str):
-    """使用 Open Meteo API 获取指定日期的天气数据"""
-    try:
-        resp = requests.get(WEATHER_URL, params={
-            'latitude': latitude,
-            'longitude': longitude,
-            'hourly': 'temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m,visibility',
-            'daily': 'temperature_2m_max,temperature_2m_min,precipitation_sum,weather_code',
-            'timezone': 'Asia/Shanghai',
-            'start_date': date_str,
-            'end_date': date_str
-        }, timeout=15)
-        data = resp.json()
-
-        # 返回日汇总数据
-        if data.get('daily'):
-            daily = data['daily']
-            return {
-                '当日最高温': daily['temperature_2m_max'][0] if daily['temperature_2m_max'][0] is not None else '',
-                '当日最低温': daily['temperature_2m_min'][0] if daily['temperature_2m_min'][0] is not None else '',
-                '当日降水量': daily['precipitation_sum'][0] if daily['precipitation_sum'][0] is not None else 0
-            }
-    except Exception as e:
-        print(f"  [警告] Open Meteo 查询失败: {e}")
-    return None
 
 
 def get_weather_wttr(city_name, date_str=None):
-    """使用 wttr.in 获取指定城市的当前天气（作为备用方案）"""
+    """使用 wttr.in 获取指定城市的天气数据"""
     try:
         resp = requests.get(f"{WTTR_URL}/{city_name}", params={
             'format': 'j1'
@@ -110,19 +33,12 @@ def get_weather_wttr(city_name, date_str=None):
 
 
 def get_station_weather(station_name, date_str):
-    """获取站点城市的天气数据，优先 Open Meteo，失败则回退 wttr.in"""
-    time.sleep(0.1)  # 请求间隔，避免触发限流
+    """获取站点城市的天气数据，使用 wttr.in"""
+    time.sleep(0.5)  # 请求间隔，避免触发限流
 
-    # 1. 先用 Open Meteo（需要坐标）
-    coords = geocode_station(station_name)
-    if coords:
-        weather = get_weather_open_meteo(coords['latitude'], coords['longitude'], date_str)
-        if weather:
-            print(f"  [天气] {station_name} ({coords['name']}) -> Open Meteo: {weather['当日最高温']}°C/{weather['当日最低温']}°C")
-            return weather
-
-    # 2. 回退到 wttr.in（直接用城市名）
+    # 提取城市名（去掉"站"、"东"、"西"、"南"、"北"等后缀）
     city_name = station_name.replace('站', '').replace('东', '').replace('西', '').replace('南', '').replace('北', '')
+    
     weather = get_weather_wttr(city_name, date_str)
     if weather:
         print(f"  [天气] {station_name} -> wttr.in: {weather['当日最高温']}°C")
