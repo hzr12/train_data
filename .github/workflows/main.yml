@@ -1,0 +1,107 @@
+name: 数据库
+on:
+  schedule:
+    - cron: '0 7 * * *'  # UTC 07:00 = UTC+8 15:00
+  workflow_dispatch:      # 支持手动触发
+
+jobs:
+  generate-csv:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write    # 必须赋予写入权限
+
+    steps:
+      # 1. 检出代码
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0  # 获取完整提交历史
+
+      # 2. 设置Python环境
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: 'pip'    # 启用pip缓存
+
+      # 3. 缓存整个Python环境
+      - name: Cache Python environment
+        uses: actions/cache@v5
+        id: cache-python
+        with:
+          path: |
+            ~/.cache/pip
+            /opt/hostedtoolcache/Python/3.11*/x64/lib/python3.11/site-packages
+          key: ${{ runner.os }}-python-${{ hashFiles('requirements.txt') }}-${{ hashFiles('main.py') }}
+          restore-keys: |
+            ${{ runner.os }}-python-
+
+      # 4. 安装依赖（仅在缓存未命中时执行）
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f "requirements.txt" ]; then
+            pip install -r requirements.txt
+          else
+            echo "⚠️  requirements.txt 文件不存在，跳过依赖安装"
+          fi
+
+      # 5. 创建datasets目录
+      - name: Create datasets folder
+        run: mkdir -p datasets
+
+      # 6. 计算两天前的日期
+      - name: Calculate date minus 2 days
+        id: date_calc
+        run: |
+          # 计算两天前的日期（UTC时间）
+          MINUS_TWO_DAYS=$(date -u -d "-2 days" +'%Y%m%d')
+          echo "MINUS_TWO_DAYS=$MINUS_TWO_DAYS" >> $GITHUB_OUTPUT
+          echo "预计文件名: datasets/${MINUS_TWO_DAYS}.csv"
+
+      # 7. 运行main.py脚本
+      - name: Run main.py
+        run: python main.py
+
+      # 8. 配置Git用户信息
+      - name: Setup Git config
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      # 9. 自动提交生成的CSV文件到datasets目录
+      - name: Commit and push CSV file
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 使用计算出的日期
+          CSV_FILE="datasets/${{ steps.date_calc.outputs.MINUS_TWO_DAYS }}.csv"
+          
+          # 检查文件是否存在
+          if [ -f "$CSV_FILE" ]; then
+            git add "$CSV_FILE"
+            git commit -m "Auto-Update: ${{ steps.date_calc.outputs.MINUS_TWO_DAYS }}.csv"
+            git push https://$GH_TOKEN@github.com/${{ github.repository }}.git main
+            echo "✅ CSV文件已提交: $CSV_FILE"
+            
+            # 显示文件内容（前5行）
+            echo "文件内容预览:"
+            head -n 5 "$CSV_FILE"
+          else
+            echo "❌ 文件未生成: $CSV_FILE"
+            echo "检查main.py是否正确输出到datasets/目录"
+            echo "当前目录内容:"
+            ls -la
+            echo "datasets目录内容:"
+            ls -la datasets/ 2>/dev/null || echo "datasets目录不存在"
+            exit 1
+          fi
+
+      # 10. 调试信息（可选）
+      - name: Debug information
+        if: always()
+        run: |
+          echo "工作流执行状态: ${{ job.status }}"
+          echo "缓存命中状态: ${{ steps.cache-python.outputs.cache-hit }}"
+          echo "所有生成的文件:"
+          find . -name "*.csv" -type f
