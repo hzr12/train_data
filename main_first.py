@@ -135,7 +135,7 @@ def get_station_weather(station_name, date_str):
         '当日降水量': ''
     }
 
-trainNumbers = ['G339']
+trainNumbers = ['G80']
 result_lists = []
 headers = {
     'Host': 'sharyou.moefactory.com',

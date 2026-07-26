@@ -55,7 +55,7 @@ jobs:
           # 计算两天前的日期（UTC时间）
           MINUS_TWO_DAYS=$(date -u -d "-2 days" +'%Y%m%d')
           echo "MINUS_TWO_DAYS=$MINUS_TWO_DAYS" >> $GITHUB_OUTPUT
-          echo "文件名将为: dataset/${MINUS_TWO_DAYS}_G339.csv"
+          echo "文件名将为: dataset/${MINUS_TWO_DAYS}_*.csv"
 
       # 7. 运行main_first.py脚本
       - name: Run main_first.py
@@ -73,12 +73,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # 使用计算出的日期
-          CSV_FILE="dataset/${{ steps.date_calc.outputs.MINUS_TWO_DAYS }}_G339.csv"
+          CSV_FILE="dataset/${{ steps.date_calc.outputs.MINUS_TWO_DAYS }}_*.csv"
           
           # 检查文件是否存在
           if [ -f "$CSV_FILE" ]; then
             git add "$CSV_FILE"
-            git commit -m "Auto-Update: ${{ steps.date_calc.outputs.MINUS_TWO_DAYS }}_G339.csv"
+            git commit -m "Auto-Update: ${{ steps.date_calc.outputs.MINUS_TWO_DAYS }}_*.csv"
             git push https://$GH_TOKEN@github.com/${{ github.repository }}.git main
             echo "✅ CSV文件已提交: $CSV_FILE"
           else
