@@ -34,7 +34,7 @@ def get_weather_wttr(city_name, date_str=None):
 
 def get_station_weather(station_name, date_str):
     """获取站点城市的天气数据，使用 wttr.in"""
-    time.sleep(0.5)  # 请求间隔，避免触发限流
+    time.sleep(0.25)  # 请求间隔，避免触发限流
 
     # 提取城市名（去掉"站"、"东"、"西"、"南"、"北"等后缀）
     city_name = station_name.replace('站', '').replace('东', '').replace('西', '').replace('南', '').replace('北', '')
