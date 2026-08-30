@@ -9,9 +9,11 @@
 """
 import os
 import glob
+import re
 import pandas as pd
+from collections import defaultdict
 
-from weather_fetch import fetch_station_weather, empty_weather, WEATHER_COLUMNS
+from weather_fetch import fetch_station_weather, fetch_city_range, empty_weather, WEATHER_COLUMNS
 
 BASE_COLUMNS = ['车次ID', '车站名', '到达日期', '到达时间',
                 '出发日期', '出发时间', '延误分钟', '距离']
@@ -68,6 +70,26 @@ def backfill_file(path):
 
 
 def main():
+    # 先按城市收集所有 (城市, 日期) 组合，每城市用一次「区间 archive 请求」批量预取，
+    # 把“城市×天数”次网络请求压到“城市数”次（约 31 次），再回填各行（命中缓存）。
+    pairs_by_city = defaultdict(set)
+    for d in DATA_DIRS:
+        if not os.path.isdir(d):
+            continue
+        for path in sorted(glob.glob(os.path.join(d, '*.csv'))):
+            df = pd.read_csv(path)
+            for _, row in df.iterrows():
+                station = row.get('车站名')
+                if station is None or pd.isna(station) or str(station).strip() == '':
+                    continue
+                station = str(station).strip()
+                city = re.sub(r'[东西南北]?站', '', station + '站')
+                date_str = _norm_date(row.get('到达日期')) or _norm_date(row.get('出发日期'))
+                if date_str:
+                    pairs_by_city[city].add(date_str)
+    for city, dates in pairs_by_city.items():
+        fetch_city_range(city, dates)
+
     total = 0
     for d in DATA_DIRS:
         if not os.path.isdir(d):

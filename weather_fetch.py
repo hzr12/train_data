@@ -13,11 +13,16 @@
 两个 API 均免费、无需 API Key，且无需维护车站经纬度表。
 """
 import re
+import os
+import json
 import requests
 import time
 
 GEO_URL = 'https://geocoding-api.open-meteo.com/v1/search'
 ARCHIVE_URL = 'https://archive-api.open-meteo.com/v1/archive'
+
+# 地理编码结果持久化（自动生成，非手写坐标表）：CI 第二次起零网络请求
+_GEO_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'geo_cache.json')
 
 # WMO 天气代码 -> 中文天气情况
 WMO_WEATHER_CN = {
@@ -47,8 +52,24 @@ _DAILY_VARS = [
     'relative_humidity_2m_mean',
 ]
 
-# 进程内地理编码缓存，避免同一城市重复请求
-_GEO_CACHE = {}
+def _load_geo_cache():
+    try:
+        with open(_GEO_CACHE_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_geo_cache():
+    try:
+        with open(_GEO_CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(_GEO_CACHE, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+# 进程内 + 持久化地理编码缓存，避免同一城市重复请求
+_GEO_CACHE = _load_geo_cache()
 # 进程内历史天气缓存，键为 (城市名, 日期)，避免同一城市同日期重复请求
 _ARCHIVE_CACHE = {}
 
@@ -115,6 +136,7 @@ def _geocode(city_name):
     if coord is None:
         print(f"  [警告] 地理编码未找到: {city_name}")
     _GEO_CACHE[city_name] = coord
+    _save_geo_cache()
     return coord
 
 
@@ -172,6 +194,104 @@ def fetch_station_weather(station_name, date_str, retries=3):
                 return None
             time.sleep(1.5 * (attempt + 1))
     return None
+
+
+def _build_weather(d, idx):
+    """从 archive 的 daily 响应里取第 idx 天的天气 dict（idx 用于多坐标/区间批量的按位置索引）。"""
+    code = int(d['weather_code'][idx])
+    w = {
+        '当日最高温': _to_float(d['temperature_2m_max'][idx]),
+        '当日最低温': _to_float(d['temperature_2m_min'][idx]),
+        '当日降水量': _to_float(d['precipitation_sum'][idx]),
+        '当日降雨量': _to_float(d['rain_sum'][idx]),
+        '当日降雪量': _to_float(d['snowfall_sum'][idx]),
+        '降水小时数': _to_float(d['precipitation_hours'][idx]),
+        '最大风速': _to_float(d['wind_speed_10m_max'][idx]),
+        '最大阵风': _to_float(d['wind_gusts_10m_max'][idx]),
+        '平均云量': _to_float(d['cloud_cover_mean'][idx]),
+        '平均相对湿度': _to_float(d['relative_humidity_2m_mean'][idx]),
+        '天气代码': code,
+        '天气情况': WMO_WEATHER_CN.get(code, f'未知({code})'),
+    }
+    return _reconcile(w)
+
+
+def _city_to_coord(city_name):
+    """城市名 -> (lat, lon)，统一走带缓存的地理编码。"""
+    return _geocode(city_name)
+
+
+def fetch_day_weather(cities, date_str, retries=3):
+    """一次性取回【多城市同一天】的天气，写入 _ARCHIVE_CACHE，使逐行查询命中缓存。
+
+    用逗号拼接多组经纬度，单次 archive 请求完成（Open-Meteo 多坐标一次返回数组），
+    把 CI 的天气请求从“城市数级”压到 1 次，规避 GitHub Runner 共享 IP 被限流。
+    cities: 城市名列表（已去车站后缀，如 '郑州'/'武汉'）。
+    """
+    coords = []
+    valid = []
+    for c in cities:
+        coord = _city_to_coord(c)
+        if coord is None:
+            continue
+        coords.append(coord)
+        valid.append(c)
+    if not coords:
+        return
+    lats = ','.join(str(x[0]) for x in coords)
+    lons = ','.join(str(x[1]) for x in coords)
+    for attempt in range(retries):
+        try:
+            resp = requests.get(ARCHIVE_URL, params={
+                'latitude': lats, 'longitude': lons,
+                'start_date': date_str, 'end_date': date_str,
+                'daily': ','.join(_DAILY_VARS),
+                'timezone': 'Asia/Shanghai',
+            }, timeout=45)
+            resp.raise_for_status()
+            data = resp.json()
+            items = data if isinstance(data, list) else [data]
+            for i, c in enumerate(valid):
+                d = items[i]['daily']
+                _ARCHIVE_CACHE[(c, date_str)] = _build_weather(d, 0)
+            return
+        except Exception as e:
+            if attempt == retries - 1:
+                print(f"  [失败] 批量天气 {date_str}: {e}")
+                return
+            time.sleep(2.0 * (attempt + 1))
+
+
+def fetch_city_range(city_name, date_list, retries=3):
+    """一次性取回【单城市多天】的天气，写入 _ARCHIVE_CACHE（用于离线全量回填）。
+
+    对 date_list 取最小~最大日期发起一次区间 archive 请求，按天索引写缓存，
+    把“城市×天数”次请求压到“城市数”次。
+    """
+    coord = _city_to_coord(city_name)
+    if coord is None or not date_list:
+        return
+    ds = sorted(date_list)
+    for attempt in range(retries):
+        try:
+            resp = requests.get(ARCHIVE_URL, params={
+                'latitude': coord[0], 'longitude': coord[1],
+                'start_date': ds[0], 'end_date': ds[-1],
+                'daily': ','.join(_DAILY_VARS),
+                'timezone': 'Asia/Shanghai',
+            }, timeout=60)
+            resp.raise_for_status()
+            d = resp.json()['daily']
+            times = d.get('time', [])
+            for j, t in enumerate(times):
+                if t in date_list:
+                    _ARCHIVE_CACHE[(city_name, t)] = _build_weather(d, j)
+            return
+        except Exception as e:
+            if attempt == retries - 1:
+                print(f"  [失败] 区间天气 {city_name} {ds[0]}~{ds[-1]}: {e}")
+                return
+            time.sleep(2.0 * (attempt + 1))
 
 
 # 天气代码语义分组（WMO）

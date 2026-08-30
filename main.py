@@ -1,9 +1,10 @@
 import requests
 import datetime
 import time
+import re
 import pandas as pd
 
-from weather_fetch import fetch_station_weather, empty_weather
+from weather_fetch import fetch_station_weather, fetch_day_weather, empty_weather
 
 trainNumbers = ['G80', 'G3726', 'G1', 'D1']
 result_lists = []
@@ -51,15 +52,7 @@ def get_result_data(num_json_data, time_json_data):
                 '距离': time_json_data['data'][i]['distance']
             }
 
-        # 获取该站点城市的天气
-        arrival_date = result['到达日期'] or result['出发日期']
-        if arrival_date:
-            date_str = f"{arrival_date[:4]}-{arrival_date[4:6]}-{arrival_date[6:8]}" if len(arrival_date) == 8 else arrival_date
-        else:
-            date_str = format_date(date)
-
-        weather = fetch_station_weather(station_name, date_str) or empty_weather()
-        result.update(weather)
+        # 天气延迟到循环结束后按“城市+日期”批量预取（见文末），避免逐行重复请求
         result_lists.append(result)
     result_lists.append({})
 
@@ -100,5 +93,43 @@ for trainNumber in trainNumbers:
     formatted_date = format_date(date)
     get_result_data(num_json_data, time_json_data)
     time.sleep(0.5)
+
+# 收集所有 (城市, 日期) 组合，按日期批量预取天气（单次 archive 请求覆盖多城市），
+# 再回填到各行。CI 的天气网络请求从“城市数级”压到“日期数级”(通常 1 次)。
+from collections import defaultdict
+pairs_by_date = defaultdict(set)
+base_date = format_date(date)
+for r in result_lists:
+    if not r:
+        continue
+    st = r.get('车站名')
+    if not st:
+        continue
+    arrival = r.get('到达日期') or r.get('出发日期')
+    if arrival and len(str(arrival)) == 8:
+        d = f"{str(arrival)[:4]}-{str(arrival)[4:6]}-{str(arrival)[6:8]}"
+    else:
+        d = arrival if arrival else base_date
+    city = re.sub(r'[东西南北]?站', '', str(st).strip() + '站')
+    pairs_by_date[d].add(city)
+
+for d, cities in pairs_by_date.items():
+    fetch_day_weather(list(cities), d)
+
+# 回填天气到每行（命中缓存，几乎零耗时）
+for r in result_lists:
+    if not r:
+        continue
+    st = r.get('车站名')
+    if not st:
+        continue
+    arrival = r.get('到达日期') or r.get('出发日期')
+    if arrival and len(str(arrival)) == 8:
+        d = f"{str(arrival)[:4]}-{str(arrival)[4:6]}-{str(arrival)[6:8]}"
+    else:
+        d = arrival if arrival else base_date
+    w = fetch_station_weather(st, d) or empty_weather()
+    r.update(w)
+
 df = pd.DataFrame(result_lists)
 df.to_csv(f'datasets/{date}.csv', index=False)
