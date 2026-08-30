@@ -49,6 +49,8 @@ _DAILY_VARS = [
 
 # 进程内地理编码缓存，避免同一城市重复请求
 _GEO_CACHE = {}
+# 进程内历史天气缓存，键为 (城市名, 日期)，避免同一城市同日期重复请求
+_ARCHIVE_CACHE = {}
 
 
 def _to_float(v):
@@ -60,29 +62,60 @@ def _to_float(v):
         return 0.0
 
 
+# Open-Meteo 地理编码对部分中国城市的中文名查不到（即使加“市”也查不到），
+# 但用拼音可查到。这里仅对“中文与加市都失败”的城市做拼音兜底（name->pinyin 提示，非经纬度表）。
+PINYIN_FALLBACK = {
+    '商丘': 'Shangqiu', '驻马店': 'Zhumadian', '汉中': 'Hanzhong',
+    '运城': 'Yuncheng', '淮南': 'Huainan', '湖州': 'Huzhou',
+    '晋中': 'Jinzhong', '连云港': 'Lianyungang', '宿迁': 'Suqian',
+    '咸宁': 'Xianning', '百色': 'Baise', '河池': 'Hechi',
+}
+
+
+def _geocode_query(name):
+    """用单个查询词请求地理编码，命中返回 (lat, lon)，否则 None。
+
+    仅在网络/限流异常时重试；明确“查无结果”直接返回 None（重试无意义）。
+    """
+    for attempt in range(3):
+        try:
+            resp = requests.get(GEO_URL, params={
+                'name': name,
+                'count': 1,
+                'language': 'zh',
+            }, timeout=15)
+            resp.raise_for_status()
+            results = resp.json().get('results') or []
+            if results:
+                r = results[0]
+                return (float(r['latitude']), float(r['longitude']))
+            return None
+        except Exception:
+            if attempt < 2:
+                time.sleep(1.0 * (attempt + 1))
+    return None
+
+
 def _geocode(city_name):
-    """城市名 -> (lat, lon)，带进程内缓存；找不到返回 None。"""
+    """城市名 -> (lat, lon)，带进程内缓存；找不到返回 None。
+
+    查询回退链：原名 -> 原名+“市” -> 拼音（PINYIN_FALLBACK）。
+    """
     if city_name in _GEO_CACHE:
         return _GEO_CACHE[city_name]
-    try:
-        resp = requests.get(GEO_URL, params={
-            'name': city_name,
-            'count': 1,
-            'language': 'zh',
-        }, timeout=15)
-        resp.raise_for_status()
-        results = resp.json().get('results') or []
-        if not results:
-            print(f"  [警告] 地理编码未找到: {city_name}")
-            _GEO_CACHE[city_name] = None
-            return None
-        r = results[0]
-        coord = (float(r['latitude']), float(r['longitude']))
-        _GEO_CACHE[city_name] = coord
-        return coord
-    except Exception as e:
-        print(f"  [警告] 地理编码失败 ({city_name}): {e}")
-        return None
+    candidates = [city_name, city_name + '市']
+    py = PINYIN_FALLBACK.get(city_name)
+    if py:
+        candidates.append(py)
+    coord = None
+    for cand in candidates:
+        coord = _geocode_query(cand)
+        if coord is not None:
+            break
+    if coord is None:
+        print(f"  [警告] 地理编码未找到: {city_name}")
+    _GEO_CACHE[city_name] = coord
+    return coord
 
 
 def fetch_station_weather(station_name, date_str, retries=3):
@@ -94,6 +127,10 @@ def fetch_station_weather(station_name, date_str, retries=3):
     """
     # 与原逻辑一致：补上“站”字再用正则提取城市名（去掉方位词 + 站）
     city_name = re.sub(r'[东西南北]?站', '', station_name + '站')
+    # 同城市同日期直接返回缓存
+    cache_key = (city_name, date_str)
+    if cache_key in _ARCHIVE_CACHE:
+        return _ARCHIVE_CACHE[cache_key]
     coord = _geocode(city_name)
     if coord is None:
         return None
@@ -126,6 +163,8 @@ def fetch_station_weather(station_name, date_str, retries=3):
                 '天气代码': code,
                 '天气情况': WMO_WEATHER_CN.get(code, f'未知({code})'),
             }
+            _ARCHIVE_CACHE[cache_key] = result
+            return result
         except Exception as e:
             if attempt == retries - 1:
                 print(f"  [失败] {station_name} {date_str}: {e}")
