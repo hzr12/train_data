@@ -49,6 +49,7 @@ def backfill_file(path):
         if not date_str:
             weather_rows.append(None)
             continue
+        # 全量重填：每行都按到达日期重新查询真实历史天气，覆盖旧的错误/假数据
         w = fetch_station_weather(station, date_str) or empty_weather()
         weather_rows.append(w)
         updated += 1
