@@ -149,7 +149,7 @@ def fetch_station_weather(station_name, date_str, retries=3):
             d = resp.json()['daily']
             code = int(d['weather_code'][0])
             time.sleep(0.12)   # 限速保护
-            return {
+            result = {
                 '当日最高温': _to_float(d['temperature_2m_max'][0]),
                 '当日最低温': _to_float(d['temperature_2m_min'][0]),
                 '当日降水量': _to_float(d['precipitation_sum'][0]),
@@ -163,6 +163,7 @@ def fetch_station_weather(station_name, date_str, retries=3):
                 '天气代码': code,
                 '天气情况': WMO_WEATHER_CN.get(code, f'未知({code})'),
             }
+            result = _reconcile(result)
             _ARCHIVE_CACHE[cache_key] = result
             return result
         except Exception as e:
@@ -171,6 +172,26 @@ def fetch_station_weather(station_name, date_str, retries=3):
                 return None
             time.sleep(1.5 * (attempt + 1))
     return None
+
+
+# 天气代码语义分组（WMO）
+_LIQUID_PRECIP = set(range(51, 68)) | {80, 81, 82}   # 毛毛雨/雨/冻雨/阵雨
+_SNOW_PRECIP = {71, 73, 75, 77, 85, 86}              # 雪/阵雪
+
+
+def _reconcile(w):
+    """对齐“天气现象”与“降水量”的口径。
+
+    Open-Meteo 的 daily.weather_code 是“当天出现最多的小时代码”（按现象统计），
+    而 rain_sum 是各小时液态降水之和。微量/未完结日期会出现“显示毛毛雨但
+    rain_sum=0.0”的矛盾。这里用 precipitation_sum 兜底，使降雨/降雪量不丢量。
+    """
+    code = w['天气代码']
+    if code in _LIQUID_PRECIP and w['当日降雨量'] == 0.0 and w['当日降水量'] > 0.0:
+        w['当日降雨量'] = max(w['当日降水量'] - w['当日降雪量'], 0.0)
+    if code in _SNOW_PRECIP and w['当日降雪量'] == 0.0 and w['当日降水量'] > 0.0:
+        w['当日降雪量'] = max(w['当日降水量'] - w['当日降雨量'], 0.0)
+    return w
 
 
 def empty_weather():
