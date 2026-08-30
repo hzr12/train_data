@@ -54,7 +54,6 @@ def get_result_data(num_json_data, time_json_data):
 
         # 天气延迟到循环结束后按“城市+日期”批量预取（见文末），避免逐行重复请求
         result_lists.append(result)
-    result_lists.append({})
 
 def get_data_json(url, headers, data):
     response = requests.post(url=url, headers=headers,data=data)
