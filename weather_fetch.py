@@ -23,6 +23,9 @@ ARCHIVE_URL = 'https://archive-api.open-meteo.com/v1/archive'
 
 # 地理编码结果持久化（自动生成，非手写坐标表）：CI 第二次起零网络请求
 _GEO_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'geo_cache.json')
+# 全国省市经纬度种子表（由 fetch_city_coords.py 从 DataV GeoAtlas 自动生成），
+# 作为首选地理编码源；Open-Meteo 仅对种子表未覆盖的区县/镇名兜底。
+_CITY_COORDS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'city_coords.json')
 
 # WMO 天气代码 -> 中文天气情况
 WMO_WEATHER_CN = {
@@ -60,6 +63,14 @@ def _load_geo_cache():
         return {}
 
 
+def _load_city_coords():
+    try:
+        with open(_CITY_COORDS_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
 def _save_geo_cache():
     try:
         with open(_GEO_CACHE_FILE, 'w', encoding='utf-8') as f:
@@ -68,8 +79,9 @@ def _save_geo_cache():
         pass
 
 
-# 进程内 + 持久化地理编码缓存，避免同一城市重复请求
-_GEO_CACHE = _load_geo_cache()
+# 地理编码缓存 = 全国种子表(city_coords.json) + 运行时经 Open-Meteo 补回的结果(geo_cache.json)
+_GEO_CACHE = dict(_load_city_coords())
+_GEO_CACHE.update(_load_geo_cache())
 # 进程内历史天气缓存，键为 (城市名, 日期)，避免同一城市同日期重复请求
 _ARCHIVE_CACHE = {}
 
