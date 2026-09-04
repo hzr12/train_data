@@ -79,9 +79,10 @@ def _save_geo_cache():
         pass
 
 
-# 地理编码缓存 = 全国种子表(city_coords.json) + 运行时经 Open-Meteo 补回的结果(geo_cache.json)
-_GEO_CACHE = dict(_load_city_coords())
-_GEO_CACHE.update(_load_geo_cache())
+# 地理编码缓存：全国种子表(city_coords.json)优先，geo_cache.json 只补种子表未覆盖的名字。
+# 加载顺序必须 geo_cache 在前、种子表在后，保证种子表的市级精确坐标覆盖早期运行时缓存。
+_GEO_CACHE = dict(_load_geo_cache())
+_GEO_CACHE.update(_load_city_coords())
 # 进程内历史天气缓存，键为 (城市名, 日期)，避免同一城市同日期重复请求
 _ARCHIVE_CACHE = {}
 
@@ -102,6 +103,7 @@ PINYIN_FALLBACK = {
     '运城': 'Yuncheng', '淮南': 'Huainan', '湖州': 'Huzhou',
     '晋中': 'Jinzhong', '连云港': 'Lianyungang', '宿迁': 'Suqian',
     '咸宁': 'Xianning', '百色': 'Baise', '河池': 'Hechi',
+    '耒阳': 'Leiyang',
 }
 
 
@@ -147,6 +149,7 @@ def _geocode(city_name):
             break
     if coord is None:
         print(f"  [警告] 地理编码未找到: {city_name}")
+        return None   # 不缓存失败结果：兜底链（种子表/拼音）改进后可自动重试自愈
     _GEO_CACHE[city_name] = coord
     _save_geo_cache()
     return coord
