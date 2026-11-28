@@ -6,7 +6,7 @@ import pandas as pd
 
 from weather_fetch import fetch_station_weather, fetch_day_weather, empty_weather
 
-trainNumbers = ['G339']
+trainNumbers = ['G1461']
 result_lists = []
 headers = {
     'Host': 'sharyou.moefactory.com',
